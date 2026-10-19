@@ -25,6 +25,12 @@ struct FsyncMetricData {
     bytes_counter: Arc<AtomicU64>,
 }
 
+impl Default for FsyncMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FsyncMetrics {
     pub fn new() -> Self {
         let data = FsyncMetricData {
@@ -64,6 +70,28 @@ impl FsyncMetrics {
         match &self.data {
             Some(data) => data.bytes_counter.load(Ordering::Relaxed),
             None => 0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::FsyncMetrics;
+
+    #[test]
+    fn default_metrics_are_enabled_and_clones_share_observations() {
+        for metrics in [FsyncMetrics::new(), FsyncMetrics::default()] {
+            assert_eq!(metrics.bytes_written(), 0);
+            assert_eq!(metrics.fsync_histogram_snapshot().count, 0);
+            let cloned = metrics.clone();
+            cloned.record_bytes_written(4096);
+            cloned.record_fsync_duration(Duration::from_millis(2));
+            assert_eq!(metrics.bytes_written(), 4096);
+            let snapshot = metrics.fsync_histogram_snapshot();
+            assert_eq!(snapshot.count, 1);
+            assert_eq!(snapshot.sum, 2_000_000);
         }
     }
 }

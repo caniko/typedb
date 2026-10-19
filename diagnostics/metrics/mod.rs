@@ -93,10 +93,6 @@ impl ServerProperties {
         &self.deployment_id
     }
 
-    pub fn server_id(&self) -> &str {
-        &self.server_id
-    }
-
     pub fn is_reporting_enabled(&self) -> bool {
         self.is_reporting_enabled
     }
@@ -273,7 +269,7 @@ pub struct SchemaLoadMetrics {
 }
 
 impl SchemaLoadMetrics {
-    pub fn to_state_report(&self) -> SchemaLoadReport {
+    pub(crate) fn to_state_report(&self) -> SchemaLoadReport {
         SchemaLoadReport { type_count: self.type_count }
     }
 }
@@ -290,7 +286,7 @@ pub struct DataLoadMetrics {
 }
 
 impl DataLoadMetrics {
-    pub fn to_state_report(&self) -> DataLoadReport {
+    pub(crate) fn to_state_report(&self) -> DataLoadReport {
         DataLoadReport {
             entity_count: self.entity_count,
             relation_count: self.relation_count,
@@ -453,10 +449,6 @@ impl ActionMetrics {
         self.get_action(action_kind).failed.load(Ordering::Relaxed)
     }
 
-    fn get_attempted(&self, action_kind: &ActionKind) -> u64 {
-        self.get_action(action_kind).get_attempted()
-    }
-
     fn get_successful_delta(&self, action_kind: &ActionKind) -> i64 {
         get_delta(
             self.get_successful(action_kind),
@@ -555,18 +547,6 @@ impl ActionInfo {
 
     pub fn submit_fail(&self) {
         self.failed.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn get_successful(&self) -> u64 {
-        self.successful.load(Ordering::Relaxed)
-    }
-
-    pub fn get_failed(&self) -> u64 {
-        self.failed.load(Ordering::Relaxed)
-    }
-
-    pub fn get_attempted(&self) -> u64 {
-        self.get_successful() + self.get_failed()
     }
 }
 
@@ -681,10 +661,7 @@ impl ActionKind {
     }
 
     pub fn is_query(&self) -> bool {
-        match self {
-            ActionKind::TransactionQuery | ActionKind::OneshotQuery => true,
-            _ => false,
-        }
+        matches!(self, ActionKind::TransactionQuery | ActionKind::OneshotQuery)
     }
 }
 

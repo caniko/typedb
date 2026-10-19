@@ -77,9 +77,7 @@ impl CoreMetrics {
     fn add_database_to_load_metrics(&self, id: Arc<DatabaseId>) {
         let mut write_lock = self.lock_load_metrics_write();
         let database_hash = id.hash_value();
-        if !write_lock.contains_key(&database_hash) {
-            write_lock.insert(database_hash, LoadMetrics::new(id));
-        }
+        write_lock.entry(database_hash).or_insert_with(|| LoadMetrics::new(id));
     }
 
     pub(crate) fn lock_load_metrics_read(&self) -> RwLockReadGuard<'_, HashMap<DatabaseHash, LoadMetrics>> {
@@ -117,9 +115,7 @@ impl CoreMetrics {
     fn add_database_to_histogram_metrics(&self, id: Arc<DatabaseId>) {
         let mut write_lock = self.lock_histogram_metrics_write();
         let database_hash = id.hash_value();
-        if !write_lock.contains_key(&database_hash) {
-            write_lock.insert(database_hash, DatabaseHistograms::new(id));
-        }
+        write_lock.entry(database_hash).or_insert_with(|| DatabaseHistograms::new(id));
     }
 
     pub(crate) fn lock_histogram_metrics_read(&self) -> RwLockReadGuard<'_, HashMap<DatabaseHash, DatabaseHistograms>> {
@@ -160,9 +156,7 @@ impl CoreMetrics {
         let id = database_name.map(DatabaseId::new);
         let database_hash = id.as_ref().map(|id| id.hash_value());
         let mut write_lock = self.lock_action_metrics_write(client);
-        if !write_lock.contains_key(&database_hash) {
-            write_lock.insert(database_hash, ActionMetrics::new(id));
-        }
+        write_lock.entry(database_hash).or_insert_with(|| ActionMetrics::new(id));
     }
 
     pub(crate) fn lock_action_metrics_read(
@@ -217,9 +211,7 @@ impl CoreMetrics {
         let id = database_name.map(DatabaseId::new);
         let database_hash = id.as_ref().map(|id| id.hash_value());
         let mut write_lock = self.lock_error_metrics_write(client);
-        if !write_lock.contains_key(&database_hash) {
-            write_lock.insert(database_hash, ErrorMetrics::new(id));
-        }
+        write_lock.entry(database_hash).or_insert_with(|| ErrorMetrics::new(id));
     }
 
     pub(crate) fn lock_error_metrics_read(
@@ -260,5 +252,83 @@ impl MonitoringSection for CoreMetrics {
 
     fn write_json(&self) -> serde_json::Map<String, JSONValue> {
         to_monitoring_json(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{path::PathBuf, time::Duration};
+
+    use serde_json::json;
+
+    use crate::{
+        DatabaseId, Diagnostics,
+        metrics::{ALL_CLIENT_ENDPOINTS, ActionKind, LoadKind, QueryType},
+    };
+
+    #[test]
+    fn repeated_database_registration_preserves_metrics_and_reports() {
+        let diagnostics = Diagnostics::new(
+            "deployment_id".into(),
+            "server_id".into(),
+            "test".into(),
+            "0.0.0".into(),
+            PathBuf::from("."),
+            true,
+            true,
+        );
+        let metrics = diagnostics.core_metrics();
+        let database_name = "diagnostics-lint";
+        let id = DatabaseId::new(database_name);
+        for _ in 0..2 {
+            // Exercise an occupied entry, as when another caller wins the write lock.
+            metrics.add_database_to_load_metrics(id.clone());
+            metrics.add_database_to_histogram_metrics(id.clone());
+            for client in ALL_CLIENT_ENDPOINTS {
+                diagnostics.increment_load_count(client, database_name, LoadKind::ReadTransactions);
+                diagnostics.observe_query_duration(database_name, QueryType::Read, Duration::from_millis(1));
+                diagnostics.wal_metrics(database_name).record_bytes_written(1024);
+                for database in [Some(database_name), None] {
+                    metrics.add_database_to_action_metrics(client, database);
+                    metrics.add_database_to_error_metrics(client, database);
+                    diagnostics.submit_action_success(client, database, ActionKind::TransactionQuery);
+                    diagnostics.submit_action_fail(client, database, ActionKind::TransactionQuery);
+                    diagnostics.submit_error(client, database, "E1".into());
+                }
+            }
+        }
+
+        let monitoring = diagnostics.to_monitoring_json();
+        assert_eq!(monitoring["serverID"], "server_id");
+        assert_eq!(monitoring["load"].as_array().unwrap().len(), 1);
+        let active = monitoring["load"][0]["activeTransactions"].as_array().unwrap();
+        assert_eq!(active.iter().filter(|entry| entry["kind"] == "read" && entry["count"] == 2).count(), 2);
+        let actions = monitoring["actions"].as_array().unwrap();
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions.iter().filter(|entry| entry["database"] == database_name).count(), 1);
+        for action in actions {
+            assert_eq!(action["attempted"], 8);
+            assert_eq!(action["successful"], 4);
+        }
+        let errors = monitoring["errors"].as_array().unwrap();
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors.iter().filter(|entry| entry["database"] == database_name).count(), 1);
+        assert!(errors.iter().all(|entry| entry["code"] == "E1" && entry["count"] == 4));
+        assert_eq!(monitoring["queryDuration"][0]["histogram"]["count"], 4);
+        assert_eq!(monitoring["walBytesWritten"][0]["value"], 4096);
+
+        let posthog = diagnostics.to_posthog_reporting_json_against_snapshot("test_api_key");
+        let batch = posthog["batch"].as_array().unwrap();
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch.iter().filter(|report| report["event"] == "server_usage").count(), 1);
+        let database = batch.iter().find(|report| report["event"] == "database_usage").unwrap();
+        assert_eq!(database["properties"]["total_queries"], json!({"successful": 4, "failed": 4}));
+        assert_eq!(database["properties"]["connection"]["read_transactions_peak_count"], json!({"grpc": 2, "http": 2}));
+        for report in batch {
+            for client in ["grpc", "http"] {
+                assert_eq!(report["properties"]["transaction_queries"][client], json!({"successful": 2, "failed": 2}));
+                assert_eq!(report["properties"]["user_errors"]["E1"][client]["count"], 2);
+            }
+        }
     }
 }

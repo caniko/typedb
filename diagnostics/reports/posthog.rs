@@ -126,7 +126,7 @@ impl From<LoadReport> for PosthogLoadReport {
         if let Some(connection_reports) = value.connection {
             for (client, report) in connection_reports {
                 for (load_kind, count) in report {
-                    let inner = connection.entry(load_kind.to_posthog_name().to_string()).or_insert_with(HashMap::new);
+                    let inner = connection.entry(load_kind.to_posthog_name().to_string()).or_default();
                     inner.insert(client, count);
                 }
             }
@@ -253,7 +253,7 @@ enum PosthogReportKind {
 }
 
 impl PosthogReportKind {
-    pub fn to_posthog_name(&self) -> &'static str {
+    pub fn to_posthog_name(self) -> &'static str {
         match self {
             PosthogReportKind::ServerUsage => "server_usage",
             PosthogReportKind::DatabaseUsage => "database_usage",
@@ -293,12 +293,12 @@ impl PosthogReportBuilder {
     }
 
     pub fn insert_action(&mut self, client: ClientEndpoint, action_report: ActionReport) {
-        let inner = self.action_reports.entry(action_report.kind).or_insert_with(HashMap::new);
+        let inner = self.action_reports.entry(action_report.kind).or_default();
         inner.insert(client, action_report.into());
     }
 
     pub fn insert_error(&mut self, client: ClientEndpoint, error_report: ErrorReport) {
-        let inner = self.error_reports.entry(error_report.code.clone()).or_insert_with(HashMap::new);
+        let inner = self.error_reports.entry(error_report.code.clone()).or_default();
         inner.insert(client, error_report.into());
     }
 

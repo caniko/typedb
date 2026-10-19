@@ -109,8 +109,7 @@ impl Reporter {
         ignore_disabling: bool,
         diagnostics: Arc<Diagnostics>,
     ) -> bool {
-        let posthog_result = Self::report_posthog(is_posthog_enabled, ignore_disabling, diagnostics).await;
-        posthog_result
+        Self::report_posthog(is_posthog_enabled, ignore_disabling, diagnostics).await
     }
 
     async fn report_posthog(
@@ -211,10 +210,10 @@ impl Reporter {
 
     fn delete_disabled_reporting_file_if_exists(data_directory: &Path) {
         let disabled_reporting_file = data_directory.join(DISABLED_REPORTING_FILE_NAME);
-        if fs::exists(&disabled_reporting_file).unwrap_or(false) {
-            if let Err(e) = fs::remove_file(&disabled_reporting_file) {
-                debug!("Failed to delete disabled reporting file: {}", e);
-            }
+        if fs::exists(&disabled_reporting_file).unwrap_or(false)
+            && let Err(e) = fs::remove_file(&disabled_reporting_file)
+        {
+            debug!("Failed to delete disabled reporting file: {}", e);
         }
     }
 

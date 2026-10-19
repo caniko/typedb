@@ -349,13 +349,13 @@ impl JsonMonitoringActionReportsBuilder {
     }
 
     pub fn build(self) -> Vec<JsonMonitoringActionReport> {
-        self.reports.into_iter().flat_map(|(_, inner)| inner.into_values()).collect()
+        self.reports.into_values().flat_map(|inner| inner.into_values()).collect()
     }
 
     pub fn insert(&mut self, report: JsonMonitoringActionReport) {
         self.reports
             .entry(report.database.clone())
-            .or_insert_with(HashMap::new)
+            .or_default()
             .entry(report.name)
             .and_modify(|existing| {
                 existing.attempted += report.attempted;
@@ -375,13 +375,13 @@ impl JsonMonitoringErrorReportsBuilder {
     }
 
     pub fn build(self) -> Vec<JsonMonitoringErrorReport> {
-        self.reports.into_iter().flat_map(|(_, inner)| inner.into_values()).collect()
+        self.reports.into_values().flat_map(|inner| inner.into_values()).collect()
     }
 
     pub fn insert(&mut self, report: JsonMonitoringErrorReport) {
         self.reports
             .entry(report.database.clone())
-            .or_insert_with(HashMap::new)
+            .or_default()
             .entry(report.code.clone())
             .and_modify(|existing| {
                 existing.count += report.count;
