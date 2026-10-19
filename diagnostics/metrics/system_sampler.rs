@@ -13,7 +13,7 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use sysinfo::{Disks, MemoryRefreshKind, Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+use sysinfo::{Disks, Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 #[derive(Debug)]
 pub(crate) struct SystemSampler {
@@ -45,11 +45,7 @@ impl SystemSampler {
         let pid = sysinfo::get_current_pid().expect("Expected to resolve current PID");
         let process_start_time_unix_seconds =
             SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let system = System::new_with_specifics(
-            RefreshKind::nothing()
-                .with_memory(MemoryRefreshKind::everything())
-                .with_processes(ProcessRefreshKind::everything()),
-        );
+        let system = System::new();
         let disks = Disks::new_with_refreshed_list();
 
         let sampler = Self {
@@ -134,5 +130,53 @@ impl SystemSampler {
     }
     pub(crate) fn process_start_time_unix_seconds(&self) -> u64 {
         self.process_start_time_unix_seconds
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::SystemSampler;
+
+    #[test]
+    #[ignore = "isolated sampler RSS comparison; run explicitly with --test-threads=1"]
+    fn sampler_initialization_and_refresh_memory() {
+        let sampler = SystemSampler::new(std::env::current_dir().unwrap());
+        for _ in 0..3 {
+            sampler.refresh();
+        }
+        eprintln!(
+            "sampler: processes={}; resident_bytes={}; virtual_bytes={}; cpu_seconds={}",
+            sampler.state.lock().unwrap().system.processes().len(),
+            sampler.process_resident_memory_bytes(),
+            sampler.process_virtual_memory_bytes(),
+            sampler.process_cpu_seconds_total(),
+        );
+        assert!(sampler.total_memory_bytes() > 0);
+        assert!(sampler.process_resident_memory_bytes() > 0);
+    }
+
+    #[test]
+    fn sampler_retains_only_its_own_process_and_preserves_metrics() {
+        let sampler = SystemSampler::new(std::env::current_dir().unwrap());
+        let start_time = sampler.process_start_time_unix_seconds();
+        let mut cpu_seconds = sampler.process_cpu_seconds_total();
+
+        for _ in 0..3 {
+            let state = sampler.state.lock().unwrap();
+            assert_eq!(state.system.processes().len(), 1);
+            assert!(state.system.process(sampler.pid).is_some());
+            drop(state);
+
+            assert!(sampler.total_memory_bytes() > 0);
+            assert!(sampler.available_memory_bytes() <= sampler.total_memory_bytes());
+            assert!(sampler.process_resident_memory_bytes() > 0);
+            assert!(sampler.process_virtual_memory_bytes() >= sampler.process_resident_memory_bytes());
+            assert!(sampler.disk_available_bytes() <= sampler.disk_total_bytes());
+            assert!(start_time > 0);
+            assert_eq!(sampler.process_start_time_unix_seconds(), start_time);
+            assert!(sampler.process_cpu_seconds_total() >= cpu_seconds);
+            cpu_seconds = sampler.process_cpu_seconds_total();
+            sampler.refresh();
+        }
     }
 }
